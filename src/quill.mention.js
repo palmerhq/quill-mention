@@ -10,6 +10,10 @@ const uniqueId = () =>
     .substring(2) + new Date().getTime().toString(36);
 
 const numberIsNaN = require('./imports/numberisnan.js');
+// escape special characters
+function escapeRegExp(string){
+  return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); // $& means the whole matched string
+}
 
 class Mention {
   constructor(quill, options) {
@@ -101,26 +105,21 @@ class Mention {
     }, this.downHandler.bind(this));
 
     quill.clipboard.addMatcher(Node.TEXT_NODE, (node, delta) => {
-      // already a MentionBlot
-      if (
-        node.previousSibling &&
-        node.previousSibling.className &&
-        node.previousSibling.className.indexOf("ql-mention-denotation-char") >
-          -1
-      ) {
-        return delta;
-      }
-
       const triggerMatch = this.options.mentionDenotationChars.find(trigger => {
         return node.data.includes(trigger);
       });
 
       if (triggerMatch) {
         // we have at least one trigger string in the pasted content,
-        // split the string at each space and replace any triggers
-        // with mentionBlots
+        // split the string replace any mentions with mentionBlots
 
-        const ops = node.data.split(" ").map(word => {
+        // We need to split on a regex that matches the trigger string
+        // as well as anything following it that matches the allowedChars.
+        // This should give us the node that needs to be converted into a
+        // mention.
+        const regex = /(\{\{[a-zA-Z0-9.-_]+\}\})/
+
+        const ops = node.data.split(regex).map(word => {
           return {
             insert: word.startsWith(triggerMatch)
               ? {
@@ -131,7 +130,7 @@ class Mention {
                     value: word
                   }
                 }
-              : `${word} `
+              : word
           };
         });
 
