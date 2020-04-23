@@ -2,8 +2,18 @@ import Quill from 'quill';
 import Keys from './constants/keys';
 import './quill.mention.css';
 import './blots/mention';
+const Delta = Quill.import("delta");
+
+const uniqueId = () =>
+  Math.random()
+    .toString(36)
+    .substring(2) + new Date().getTime().toString(36);
 
 const numberIsNaN = require('./imports/numberisnan.js');
+// escape special characters
+function escapeRegExp(string){
+  return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); // $& means the whole matched string
+}
 
 class Mention {
   constructor(quill, options) {
@@ -93,6 +103,43 @@ class Mention {
     quill.keyboard.addBinding({
       key: Keys.DOWN,
     }, this.downHandler.bind(this));
+
+    quill.clipboard.addMatcher(Node.TEXT_NODE, (node, delta) => {
+      const triggerMatch = this.options.mentionDenotationChars.find(trigger => {
+        return node.data.includes(trigger);
+      });
+
+      if (triggerMatch) {
+        // we have at least one trigger string in the pasted content,
+        // split the string replace any mentions with mentionBlots
+
+        // We need to split on a regex that matches the trigger string
+        // as well as anything following it that matches the allowedChars.
+        // This should give us the node that needs to be converted into a
+        // mention.
+        const regex = /(\{\{[a-zA-Z0-9.-_]+\}\})/
+
+        const ops = node.data.split(regex).map(word => {
+          return {
+            insert: word.startsWith(triggerMatch)
+              ? {
+                  mention: {
+                    denotationChar: "",
+                    id: uniqueId(),
+                    index: 0,
+                    value: word
+                  }
+                }
+              : word
+          };
+        });
+
+        return new Delta(ops);
+      }
+
+      return delta;
+    });
+
   }
 
   selectHandler() {
@@ -370,25 +417,66 @@ class Mention {
     const range = this.quill.getSelection();
     if (range == null) return;
     this.cursorPos = range.index;
-    const startPos = Math.max(0, this.cursorPos - this.options.maxChars);
-    const beforeCursorPos = this.quill.getText(startPos, this.cursorPos - startPos);
-    const mentionCharIndex = this.options.mentionDenotationChars.reduce((prev, cur) => {
-      const previousIndex = prev;
-      const mentionIndex = beforeCursorPos.lastIndexOf(cur);
 
-      return mentionIndex > previousIndex ? mentionIndex : previousIndex;
-    }, -1);
+    const startPos = Math.max(0, this.cursorPos - this.options.maxChars);
+    const beforeCursorPos = this.quill.getText(
+      startPos,
+      this.cursorPos - startPos
+    );
+
+    // given an array of trigger strings, eg ['{{', '@'], we want to loop
+    // through them and return if that match, and at which index
+    const {
+      index: mentionCharIndex,
+      match
+    } = this.options.mentionDenotationChars.reduce(
+      (prev, trigger) => {
+        const mentionIndex = beforeCursorPos.lastIndexOf(trigger);
+
+        const isCloserToCursorThanPreviousMatch = mentionIndex > prev.index;
+
+        if (isCloserToCursorThanPreviousMatch) {
+          return {
+            index: mentionIndex,
+            match: trigger
+          };
+        }
+
+        return prev;
+      },
+      { index: -1 }
+    );
+
     if (mentionCharIndex > -1) {
-      if (this.options.isolateCharacter && !(mentionCharIndex === 0 || !!beforeCursorPos[mentionCharIndex - 1].match(/\s/g))) {
+      if (
+        this.options.isolateCharacter &&
+        !(
+          mentionCharIndex === 0 ||
+          !!beforeCursorPos[mentionCharIndex - 1].match(/\s/g)
+        )
+      ) {
         this.hideMentionList();
         return;
       }
-      const mentionCharPos = this.cursorPos - (beforeCursorPos.length - mentionCharIndex);
+      const mentionCharPos =
+        this.cursorPos - (beforeCursorPos.length - mentionCharIndex);
       this.mentionCharPos = mentionCharPos;
-      const textAfter = beforeCursorPos.substring(mentionCharIndex + 1);
-      if (textAfter.length >= this.options.minChars && this.hasValidChars(textAfter)) {
-        const mentionChar = beforeCursorPos[mentionCharIndex];
-        this.options.source(textAfter, this.renderList.bind(this, mentionChar), mentionChar);
+      const textAfter = beforeCursorPos.substring(
+        mentionCharIndex + match.length
+      );
+      if (
+        textAfter.length >= this.options.minChars &&
+        this.hasValidChars(textAfter)
+      ) {
+        const mentionChar = beforeCursorPos.substring(
+          mentionCharIndex,
+          match.length
+        );
+        this.options.source(
+          textAfter,
+          this.renderList.bind(this, mentionChar),
+          mentionChar
+        );
       } else {
         this.hideMentionList();
       }
